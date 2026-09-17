@@ -1,0 +1,17 @@
+# Configuração local e credenciais
+.env*
+*.pem
+*.p12
+*.pfx
+
+# Arquivos temporários de trabalho
+.codex-tmp/
+.npm-cache/
+**/.npm-cache/
+**/cypress/videos/
+**/cypress/screenshots/
+**/cypress/downloads/
+**/cypress/results/
+~$*
+*.log
+*.tsbuildinfo

@@ -1,0 +1,33 @@
+import { api, body } from './api'
+export type CartItem = { productId: string; quantity: number; name?: string; unitPrice?: number }
+export type OrderStatus = 'EM ABERTO' | 'EM PROCESSAMENTO' | 'APROVADA' | 'REPROVADA' | 'PAGAMENTO REALIZADO' | 'EM TRÂNSITO' | 'EM TRANSPORTE' | 'ENTREGUE' | 'CANCELADO' | 'EM TROCA' | 'TROCA AUTORIZADA' | 'TROCADO'
+export type ExchangeStatus = 'TROCA SOLICITADA' | 'TROCA ACEITA' | 'TROCA NEGADA' | 'ITEM ENVIADO' | 'ITEM RECEBIDO' | 'TROCA PROCESSADA'
+export type Pedido = { id: string; numero: number; customerId: string; date: string; total: number; status: OrderStatus; items: CartItem[]; productSummary: string; addressId?: string; addressSnapshot: string; couponCodes?: string[]; payments?: { cardId?: string; amount: number; status: string; brand?: string; lastDigits?: string }[]; subtotal: number; frete: number; desconto: number; creditCouponCode?: string; creditValue: number; expiresAt?: string }
+export type Troca = { id: string; orderId: string; orderNumber: number; customerId: string; productId?: string; productName: string; quantity?: number; reason?: string; status: ExchangeStatus; carrier?: string; trackingCode?: string; statusDrs: string; couponCode?: string; dispatchDate?: string; reentradaEstoque: boolean; observacoes?: string }
+export type TrocaInput = { orderId: string; productId: string; quantity: number; reason: string }
+export type Cupom = { id: string; code: string; type: string; value: number; validUntil: string; status: string }
+export type Pagamento = { id: string; pedidoId: string; pedidoNumero: number; valor: number; status: string; cartaoFinal?: string }
+export type Atividade = { id: string; data: string; acao: string; entidade: string; responsavel: string }
+export type Transacoes = { pedidos: Pedido[]; trocas: Troca[]; pagamentos: Pagamento[]; cupons: Cupom[]; atividades: Atividade[]; notificacoes: { id: string; data: string; mensagem: string }[] }
+export type CartSummary = { items: CartItem[]; expiresAt?: string; removed: { productId: string; name: string; quantity: number; reason: string; removedAt: string }[]; warnings: string[] }
+export type CheckoutSelection = { enderecoId?: string; cupomIds: string[] }
+export type Quote = Omit<CartSummary, 'items'> & { items: Required<CartItem>[]; subtotal: number; frete: number; totalCompra: number; desconto: number; totalCartoes: number; creditoTroca: number; revisao: string; modoPagamento: string }
+export type CheckoutInput = CheckoutSelection & { enderecoId: string; pagamentos: { cartaoId: string; valor: number }[]; chaveOperacao: string; totalEsperado: number; revisao: string }
+export const vendaService = {
+  solicitarTroca: (id: string, data: TrocaInput) => api<Troca>(`/clientes/${id}/trocas`, { method: 'POST', body: body(data) }),
+  statusTroca: (id: string, status: ExchangeStatus, reentradaEstoque?: boolean, observacoes?: string) => api<Troca>(`/trocas/${id}/status`, { method: 'PATCH', body: body({ status, reentradaEstoque, observacoes }) }),
+  despacharTroca: (clienteId: string, id: string, carrier: string, trackingCode: string, dispatchDate: string) => api<Troca>(`/clientes/${clienteId}/trocas/${id}/despacho`, { method: 'POST', body: body({ carrier, trackingCode, dispatchDate }) }),
+  pedidos: () => api<Pedido[]>('/pedidos'),
+  trocas: () => api<Troca[]>('/trocas'),
+  cupons: (id: string) => api<Cupom[]>(`/clientes/${id}/cupons`),
+  transacoes: (id: string) => api<Transacoes>(`/clientes/${id}/transacoes`),
+  carrinho: (id: string) => api<CartItem[]>(`/clientes/${id}/carrinho`),
+  resumoCarrinho: (id: string) => api<CartSummary>(`/clientes/${id}/carrinho/resumo`),
+  orcamento: (id: string, data: CheckoutSelection) => api<Quote>(`/clientes/${id}/checkout/orcamento`, { method: 'POST', body: body(data) }),
+  finalizar: (id: string, data: CheckoutInput) => api<Pedido>(`/clientes/${id}/pedidos`, { method: 'POST', body: body(data) }),
+  processarPagamento: (id: string) => api<Pedido>(`/pedidos/${id}/pagamento`, { method: 'POST' }),
+  statusPedido: (id: string, status: OrderStatus) => api<Pedido>(`/pedidos/${id}/status`, { method: 'PATCH', body: body({ status }) }),
+  statusCliente: (clienteId: string, id: string, status: OrderStatus) => api<Pedido>(`/clientes/${clienteId}/pedidos/${id}/status`, { method: 'PATCH', body: body({ status }) }),
+  adicionar: (id: string, produtoId: string, quantidade: number) => api<CartItem[]>(`/clientes/${id}/carrinho/itens/${produtoId}`, { method: 'POST', body: body({ quantidade }) }),
+  quantidade: (id: string, produtoId: string, quantidade: number) => api<CartItem[]>(`/clientes/${id}/carrinho/itens/${produtoId}`, { method: 'PUT', body: body({ quantidade }) }),
+}
