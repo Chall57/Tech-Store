@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { Alert } from '@mui/material'
 import type { ReactNode } from 'react'
 import type { Transacoes } from '../services/vendaService'
@@ -30,6 +30,9 @@ function TransactionGroup({ title, count, children }: { title: string; count: nu
 }
 
 export function CustomerTransactions({ data }: { data: Transacoes }) {
+  const { pathname } = useLocation()
+  const admin = pathname.startsWith('/admin/')
+  const orderPath = (id: string) => `${admin ? '/admin' : ''}/pedidos/${id}`
   return <>
     <section className="panel account-section" aria-labelledby="customer-transactions-heading">
       <header className="account-section__heading"><div><span className="eyebrow">MINHA CONTA</span><h3 id="customer-transactions-heading">Transações do cliente</h3><p>Compras, pagamentos, trocas e cupons em um só lugar.</p></div></header>
@@ -40,21 +43,21 @@ export function CustomerTransactions({ data }: { data: Transacoes }) {
       <div className="transaction-grid">
         <TransactionGroup title="Pedidos" count={data.pedidos.length}>
           {data.pedidos.map(p => <li key={p.id} data-order-id={p.id}>
-            <div className="transaction-list__heading"><Link to={`/pedidos/${p.id}`}>Pedido {p.numero}</Link><TransactionStatus status={p.status} /></div>
+            <div className="transaction-list__heading"><Link to={orderPath(p.id)}>Pedido {p.numero}</Link><TransactionStatus status={p.status} /></div>
             <p>{p.productSummary || `${p.items.length} item(ns)`}</p>
             <div className="transaction-list__footer"><time dateTime={p.date}>{dateTime.format(new Date(p.date))}</time><strong>{currency.format(p.total)}</strong></div>
           </li>)}
         </TransactionGroup>
         <TransactionGroup title="Pagamentos" count={data.pagamentos.length}>
           {data.pagamentos.map(p => <li key={p.id}>
-            <div className="transaction-list__heading"><Link to={`/pedidos/${p.pedidoId}`}>Pedido {p.pedidoNumero}</Link><TransactionStatus status={p.status} /></div>
+            <div className="transaction-list__heading"><Link to={orderPath(p.pedidoId)}>Pedido {p.pedidoNumero}</Link><TransactionStatus status={p.status} /></div>
             <div className="transaction-list__footer"><span>{p.cartaoFinal ? `Cartão final ${p.cartaoFinal}` : 'Pagamento registrado'}</span><strong>{currency.format(p.valor)}</strong></div>
           </li>)}
         </TransactionGroup>
         <TransactionGroup title="Trocas" count={data.trocas.length}>
           {data.trocas.map(t => <li key={t.id}>
-            <div className="transaction-list__heading"><Link to={`/pedidos/${t.orderId}`}>Pedido {t.orderNumber}</Link><TransactionStatus status={t.status} /></div>
-            <p>{t.productName}</p><div className="transaction-list__footer"><span>{t.quantity ?? 1} unidade(s)</span><Link to="/trocas">Acompanhar troca →</Link></div>
+            <div className="transaction-list__heading"><Link to={orderPath(t.orderId)}>Pedido {t.orderNumber}</Link><TransactionStatus status={t.status} /></div>
+            <p>{t.productName}</p><div className="transaction-list__footer"><span>{t.quantity ?? 1} unidade(s)</span><Link to={admin ? '/admin/trocas' : '/trocas'}>Acompanhar troca →</Link></div>
           </li>)}
         </TransactionGroup>
         <TransactionGroup title="Cupons" count={data.cupons.length}>
@@ -75,7 +78,7 @@ export function CustomerTransactions({ data }: { data: Transacoes }) {
         return <li key={a.id}>
           <span className="account-timeline__marker" aria-hidden="true" />
           <div><strong>{activityLabels[a.acao] ?? a.acao.replaceAll('_', ' ').toLocaleLowerCase('pt-BR')}</strong>
-            {order ? <Link to={`/pedidos/${order.id}`}>Pedido {order.numero}</Link> : <span>{entityLabels[entity] ?? entity}</span>}
+            {order ? <Link to={orderPath(order.id)}>Pedido {order.numero}</Link> : <span>{entityLabels[entity] ?? entity}</span>}
           </div><time dateTime={a.data}>{dateTime.format(new Date(a.data))}</time>
         </li>
       })}</ul>

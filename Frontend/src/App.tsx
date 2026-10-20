@@ -22,7 +22,11 @@ import {
 import './App.css'
 import { DemoProvider } from './context/DemoContext'
 
-const theme = createTheme({ palette: { mode: 'light', primary: { main: '#ef691f' } }, typography: { fontFamily: 'inherit' } })
+const baseTheme = createTheme({ palette: { mode: 'light', primary: { main: '#ef691f' } }, typography: { fontFamily: 'inherit' } })
+const typographyVariants = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'subtitle1', 'subtitle2', 'body1', 'body2', 'button', 'caption', 'overline'] as const
+const theme = createTheme(baseTheme, { typography: Object.fromEntries(typographyVariants.map(variant => [variant, {
+  ...baseTheme.typography[variant], fontSize: `calc(${baseTheme.typography[variant].fontSize} + var(--font-size-increase))`,
+}])) })
 function App() {
   return (
     <ThemeProvider theme={theme}><DemoProvider><Routes>
@@ -61,6 +65,7 @@ function App() {
           path="pedidos"
           element={<AdminModulePage module="orders" />}
         />
+        <Route path="pedidos/:orderId" element={<OrderDetailPage admin />} />
         <Route
           path="trocas"
           element={<AdminExchangesPage />}

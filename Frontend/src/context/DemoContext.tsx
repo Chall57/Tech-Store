@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useLocation } from 'react-router-dom'
 import { clienteService, enderecoService, cartaoService, type PerfilCliente, type ClienteInput, type Endereco, type EnderecoInput, type Cartao, type CartaoInput } from '../services/clienteService'
 import { produtoService } from '../services/produtoService'
 import { vendaService } from '../services/vendaService'
@@ -16,6 +17,8 @@ type Notification = { id: number; message: string; tone: 'success' | 'info' | 'w
 // Mantém os imports existentes; todos os registros agora vêm da API.
 function useStoreData() {
   const queryClient = useQueryClient()
+  const { pathname } = useLocation()
+  const isAdmin = pathname === '/admin' || pathname.startsWith('/admin/')
   const [activeCustomerId, setActiveCustomerId] = useState(() => {
     const id = sessionStorage.getItem('techstore.perfil') ?? ''
     return id === 'ADMIN' ? '' : id
@@ -28,8 +31,11 @@ function useStoreData() {
   }, [notification])
   const customersQuery = useQuery({ queryKey: ['perfis'], queryFn: clienteService.perfis })
   const productsQuery = useQuery({ queryKey: ['produtos'], queryFn: produtoService.listar, refetchInterval: 30000 })
-  const ordersQuery = useQuery({ queryKey: ['pedidos'], queryFn: vendaService.pedidos })
-  const exchangesQuery = useQuery({ queryKey: ['trocas'], queryFn: vendaService.trocas })
+  // A loja consulta apenas o perfil atual; a gestão continua consultando todos.
+  // Isso reduz dados transferidos, mas não substitui autenticação (fora do escopo).
+  const scope = isAdmin ? 'admin' : activeCustomerId
+  const ordersQuery = useQuery({ queryKey: ['pedidos', scope], queryFn: () => vendaService.pedidos(isAdmin ? undefined : activeCustomerId), enabled: isAdmin || !!activeCustomerId })
+  const exchangesQuery = useQuery({ queryKey: ['trocas', scope], queryFn: () => vendaService.trocas(isAdmin ? undefined : activeCustomerId), enabled: isAdmin || !!activeCustomerId })
   const addressesQuery = useQuery({ queryKey: ['enderecos', activeCustomerId], queryFn: () => enderecoService.listar(activeCustomerId), enabled: !!activeCustomerId })
   const cardsQuery = useQuery({ queryKey: ['cartoes', activeCustomerId], queryFn: () => cartaoService.listar(activeCustomerId), enabled: !!activeCustomerId })
   const couponsQuery = useQuery({ queryKey: ['cupons', activeCustomerId], queryFn: () => vendaService.cupons(activeCustomerId), enabled: !!activeCustomerId })
@@ -76,6 +82,8 @@ function useStoreData() {
     exchanges: exchangesQuery.data ?? [], coupons: couponsQuery.data ?? [],
     productStatuses: Object.fromEntries(products.map(p => [p.id, !p.ativo ? 'Inativo' : p.stock > 0 ? 'Ativo' : 'Sem estoque'])) as Record<string, ProductStatus>,
     loading: queries.some(q => q.isLoading), error: queries.find(q => q.error)?.error,
+    productsLoading: productsQuery.isPending, productsError: productsQuery.error,
+    ordersLoading: ordersQuery.isLoading, ordersError: ordersQuery.error,
     reload: () => queryClient.invalidateQueries(), mutate, notification, notify, selectCustomer,
     clearNotification: () => setNotification(null),
     addCustomer: (data: ClienteInput) => mutate(() => clienteService.cadastrar(data), 'Cliente cadastrado com sucesso.'),
@@ -93,15 +101,9 @@ function useStoreData() {
     updateCartQuantity: changeCart, removeFromCart: (id: string) => changeCart(id, 0),
     createOrder: async (data: CheckoutInput) => {
       const registrado = await vendaService.finalizar(activeCustomerId, data)
-      let resultado = registrado
-      let falha = ''
-      try { resultado = await vendaService.processarPagamento(registrado.id) }
-      catch (error) { falha = errorMessage(error) }
       await queryClient.invalidateQueries({ predicate: q => q.queryKey[0] !== 'checkout' })
-      notify(falha ? `Pedido registrado. Pagamento aguardando processamento: ${falha}`
-        : resultado.status === 'REPROVADA' ? 'Pagamento recusado no ambiente local. Estoque e cupons liberados.'
-          : 'Compra realizada com sucesso.', falha || resultado.status === 'REPROVADA' ? 'warning' : 'success')
-      return resultado
+      notify('Pedido registrado com sucesso. Status: EM PROCESSAMENTO.')
+      return registrado
     },
     updateOrderStatus: (id: string, status: OrderStatus) => mutate(() => vendaService.statusPedido(id, status), 'Status do pedido alterado.'),
     customerOrderStatus: (id: string, status: OrderStatus) => mutate(() => vendaService.statusCliente(activeCustomerId, id, status), 'Pedido atualizado.'),

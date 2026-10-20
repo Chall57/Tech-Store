@@ -21,10 +21,24 @@ public class ProdutoService {
     public ProdutoModel exigir(UUID id) { return produtos.findById(id).orElseThrow(()->RegraException.inexistente("Produto não encontrado.")); }
     private ProdutoResponse resposta(ProdutoModel p) {
         var e=estoques.findByProdutoId(p.getId()).orElseThrow(()->RegraException.conflito("Produto sem registro de estoque."));
+        return resposta(p,e);
+    }
+    private ProdutoResponse resposta(ProdutoModel p,EstoqueModel e) {
         return new ProdutoResponse(p.getId(),p.getNome(),p.getMarca(),p.getDescricao(),p.getImagem(),p.getPreco(),p.getCusto(),p.getAtivo(),
             p.getGrupoPrecificacao().getId(),p.getCategorias().stream().map(c->new ProdutoResponse.Dominio(c.getId(),c.getNome())).toList(),e.getQuantidade(),e.getReservado(),p.getJustificativaStatus(),p.getCategoriaStatus());
     }
-    public List<ProdutoResponse> listar() { return produtos.findAll().stream().map(this::resposta).toList(); }
+    // Ordem determinística: os novos cadastros aparecem no início do catálogo.
+    public List<ProdutoResponse> listar() {
+        var lista=produtos.findAllByOrderByCriadoEmDescIdAsc();
+        if(lista.isEmpty()) return List.of();
+        var saldos=estoques.findByProdutoIdIn(lista.stream().map(ProdutoModel::getId).toList()).stream()
+            .collect(java.util.stream.Collectors.toMap(e->e.getProduto().getId(),e->e));
+        return lista.stream().map(p->{
+            var saldo=saldos.get(p.getId());
+            if(saldo==null) throw RegraException.conflito("Produto sem registro de estoque.");
+            return resposta(p,saldo);
+        }).toList();
+    }
     public ProdutoResponse consultar(UUID id) { return resposta(exigir(id)); }
     public Map<String,List<ProdutoResponse.Dominio>> dominios() {
         return Map.of("categorias",categorias.findAll().stream().map(c->new ProdutoResponse.Dominio(c.getId(),c.getNome())).toList(),

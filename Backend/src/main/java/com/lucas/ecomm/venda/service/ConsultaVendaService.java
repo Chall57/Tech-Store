@@ -32,12 +32,14 @@ public class ConsultaVendaService {
     public record Cupom(UUID id,String code,String type,BigDecimal value,LocalDate validUntil,String status) {}
     public record Atividade(UUID id,Instant data,String acao,String entidade,String responsavel) {}
     private Pedido pedido(PedidoModel p) {
-        var lista=itens.findByPedidoId(p.getId());
+        return pedido(p,itens.findByPedidoId(p.getId()),cuponsAplicados.findByPedidoId(p.getId()),pagamentos.findByPedidoId(p.getId()));
+    }
+    private Pedido pedido(PedidoModel p,List<ItemPedidoModel> lista,List<PedidoCupomModel> vouchers,List<PagamentoModel> valores) {
         return new Pedido(p.getId(),p.getCliente().getId(),p.getCriadoEm(),p.getTotal(),p.getStatus(),
             lista.stream().map(i->new Item(i.getProduto().getId(),i.getQuantidade(),i.getNomeProduto(),i.getPrecoUnitario())).toList(),
             String.join(" + ",lista.stream().map(ItemPedidoModel::getNomeProduto).toList()),p.getEndereco()==null?null:p.getEndereco().getId(),p.getEnderecoEntrega(),
-            cuponsAplicados.findByPedidoId(p.getId()).stream().map(c->c.getCupom().getCodigo()).toList(),
-            pagamentos.findByPedidoId(p.getId()).stream().map(pg->new PagamentoPedido(
+            vouchers.stream().map(c->c.getCupom().getCodigo()).toList(),
+            valores.stream().map(pg->new PagamentoPedido(
                 pg.getCartao()==null?null:pg.getCartao().getId(),pg.getValor(),pg.getStatus(),
                 pg.getBandeira()!=null?pg.getBandeira():pg.getCartao()==null?null:pg.getCartao().getBandeira().getNome(),
                 pg.getCartaoFinal()!=null?pg.getCartaoFinal():pg.getCartao()==null?null:pg.getCartao().getUltimosDigitos())).toList(),
@@ -50,7 +52,14 @@ public class ConsultaVendaService {
     public Troca consultarTroca(UUID id) { return troca(trocas.findById(id).orElseThrow(()->com.lucas.ecomm.shared.api.RegraException.inexistente("Troca não encontrada."))); }
     public List<Pedido> pedidos(UUID clienteId) {
         if(clienteId!=null) clientes.exigir(clienteId);
-        return (clienteId==null?pedidos.findAllByOrderByCriadoEmDesc():pedidos.findByClienteIdOrderByCriadoEmDesc(clienteId)).stream().map(this::pedido).toList();
+        var lista=clienteId==null?pedidos.findAllByOrderByCriadoEmDesc():pedidos.findByClienteIdOrderByCriadoEmDesc(clienteId);
+        if(lista.isEmpty()) return List.of();
+        var ids=lista.stream().map(PedidoModel::getId).toList();
+        // Busca em lote: o número de SELECTs não cresce a cada pedido da listagem.
+        var produtos=itens.findByPedidoIdIn(ids).stream().collect(java.util.stream.Collectors.groupingBy(i->i.getPedido().getId()));
+        var vouchers=cuponsAplicados.findByPedidoIdIn(ids).stream().collect(java.util.stream.Collectors.groupingBy(a->a.getPedido().getId()));
+        var valores=pagamentos.findByPedidoIdIn(ids).stream().collect(java.util.stream.Collectors.groupingBy(pg->pg.getPedido().getId()));
+        return lista.stream().map(p->pedido(p,produtos.getOrDefault(p.getId(),List.of()),vouchers.getOrDefault(p.getId(),List.of()),valores.getOrDefault(p.getId(),List.of()))).toList();
     }
     public Pedido consultar(UUID id) {
         return pedido(pedidos.findById(id).orElseThrow(()->com.lucas.ecomm.shared.api.RegraException.inexistente("Pedido não encontrado.")));

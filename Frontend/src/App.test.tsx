@@ -19,7 +19,7 @@ function renderApp(path = '/') {
 describe('Tech Store conectada à API', () => {
   it('mantém navegação e carrinho vazio quando não há registros', async () => {
     renderApp()
-    expect(screen.getByRole('heading', { name: /componentes para montar/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /componentes para montar/i })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Conta' })).toHaveAttribute('href', '/conta')
     await userEvent.click(screen.getAllByRole('link', { name: /carrinho/i })[0])
     expect(await screen.findByText('Seu carrinho está vazio.')).toBeInTheDocument()
@@ -66,10 +66,62 @@ describe('Tech Store conectada à API', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('Bad Gateway', { status })))
     await expect(api('/produtos')).rejects.toMatchObject({ status, message: expect.stringContaining('Verifique se o backend está em execução') })
   })
+  it.each([null, [], { fields: null }, { message: 123, fields: { cpf: {} } }])('preserva erro HTTP mesmo com corpo inválido %j', async payload => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(payload), { status: 400 })))
+    await expect(api('/clientes')).rejects.toMatchObject({ name: 'ApiError', status: 400, fields: {} })
+  })
+  it('consulta somente os pedidos e trocas do cliente selecionado na loja', async () => {
+    sessionStorage.setItem('techstore.perfil', 'cliente-1')
+    renderApp('/pedidos')
+    await screen.findByText('Este perfil ainda não possui pedidos.')
+    expect(fetch).toHaveBeenCalledWith('/api/pedidos?clienteId=cliente-1', expect.anything())
+    expect(fetch).toHaveBeenCalledWith('/api/trocas?clienteId=cliente-1', expect.anything())
+    expect(fetch).not.toHaveBeenCalledWith('/api/pedidos', expect.anything())
+  })
+  it('abre o pedido do histórico administrativo sem exigir perfil de cliente', async () => {
+    const pedido = { id: 'pedido-1', numero: 111082, customerId: 'cliente-1', date: '2026-10-17T12:00:00Z',
+      total: 114.9, subtotal: 100, frete: 14.9, desconto: 0, status: 'ENTREGUE', items: [], payments: [], couponCodes: [], addressSnapshot: 'Arujá/SP' }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const path = new URL(url, 'http://localhost').pathname
+      const payload = path === '/api/pedidos' ? [pedido]
+        : path === '/api/clientes/cliente-1' ? { id: 'cliente-1', nome: 'Cliente do histórico', email: 'cliente@techstore.test', ativo: true, ranking: 1 }
+          : path.endsWith('/transacoes') ? { pedidos: [pedido], pagamentos: [], trocas: [], cupons: [], atividades: [], notificacoes: [] } : []
+      return new Response(JSON.stringify(payload), { status: 200 })
+    }))
+    renderApp('/admin/clientes?cliente=cliente-1')
+    await userEvent.click(await screen.findByRole('link', { name: 'Pedido 111082' }))
+    expect(await screen.findByRole('heading', { name: 'Pedido 111082' })).toBeInTheDocument()
+    for (const link of screen.getAllByRole('link', { name: 'Pedidos' })) expect(link).toHaveAttribute('href', '/admin/pedidos')
+    expect(screen.queryByText('Página não encontrada')).not.toBeInTheDocument()
+  })
   it('mantém a conversa do chatbot sem integrar Llama nesta etapa', async () => {
     renderApp()
+    await screen.findByRole('heading', { name: /componentes para montar/i })
     await userEvent.click(screen.getByRole('button', { name: 'Ajuda com IA' }))
     expect(screen.getByRole('dialog', { name: 'Assistente de hardware' })).toBeInTheDocument()
     expect(screen.getByText('Me indique uma placa de vídeo.')).toBeInTheDocument()
+  })
+  it.each([
+    ['/produtos/teste', '/produtos', 'Carregando produto...'],
+    ['/pedidos/teste', '/pedidos', 'Carregando pedido...'],
+  ])('mostra spinner e não 404 enquanto a consulta da rota %s está pendente', async (path, endpoint, message) => {
+    if (endpoint === '/pedidos') sessionStorage.setItem('techstore.perfil', 'cliente-1')
+    let respond!: (value: Response) => void
+    const pending = new Promise<Response>(resolve => { respond = resolve })
+    vi.stubGlobal('fetch', vi.fn((url: string) => new URL(url, 'http://localhost').pathname.endsWith(endpoint)
+      ? pending : Promise.resolve(new Response('[]', { status: 200 }))))
+    renderApp(path)
+    expect(screen.getByRole('progressbar', { name: message })).toBeInTheDocument()
+    expect(screen.queryByText('Página não encontrada')).not.toBeInTheDocument()
+    respond(new Response('[]', { status: 200 }))
+    expect(await screen.findByText('Página não encontrada')).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar', { name: message })).not.toBeInTheDocument()
+  })
+  it.each(['/produtos/teste', '/pedidos/teste'])('trata falha de API da rota %s como erro, não como 404', async path => {
+    if (path.startsWith('/pedidos/')) sessionStorage.setItem('techstore.perfil', 'cliente-1')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Bad Gateway', { status: 503 })))
+    renderApp(path)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Verifique se o backend está em execução')
+    expect(screen.queryByText('Página não encontrada')).not.toBeInTheDocument()
   })
 })

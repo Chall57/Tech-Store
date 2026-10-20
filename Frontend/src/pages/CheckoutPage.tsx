@@ -5,6 +5,7 @@ import { Alert, LinearProgress } from '@mui/material'
 import { useDemoStore } from '../context/DemoContext'
 import { vendaService } from '../services/vendaService'
 import { cartaoService } from '../services/clienteService'
+import type { EnderecoInput, CartaoInput } from '../services/clienteService'
 import { errorMessage } from '../services/api'
 import { MockEditor } from '../components/MockEditor'
 import { addressFields, addressInput, cardFields } from '../components/CustomerFormFields'
@@ -18,7 +19,7 @@ const cents = (value: number) => Math.round(value * 100)
 
 export function CheckoutPage() {
   const store = useDemoStore()
-  const { activeCustomerId, addresses, cards, coupons, createOrder, saveAddress, saveCard } = store
+  const { activeCustomerId, addresses, cards, coupons, createOrder } = store
   const navigate = useNavigate()
   const [selectedAddress, setSelectedAddress] = useState('')
   const [selectedCards, setSelectedCards] = useState<string[] | null>(null)
@@ -28,14 +29,19 @@ export function CheckoutPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [operationKey] = useState(() => crypto.randomUUID())
+  const [newAddress, setNewAddress] = useState<{ data: EnderecoInput; incorporate: boolean } | null>(null)
+  const [newCards, setNewCards] = useState<{ id: string; data: CartaoInput; incorporate: boolean }[]>([])
   const addressId = selectedAddress || addresses.find(a => a.entrega)?.id || ''
+  const selectedNewAddress = addressId === 'novo-endereco' ? newAddress : null
+  const selection = { enderecoId: selectedNewAddress ? undefined : addressId || undefined, novoEndereco: selectedNewAddress?.data, cupomIds: selectedCoupons }
   const brands = useQuery({ queryKey: ['bandeiras'], queryFn: cartaoService.bandeiras, enabled: !!activeCustomerId })
-  const quote = useQuery({ queryKey: ['checkout', activeCustomerId, addressId, selectedCoupons],
-    queryFn: () => vendaService.orcamento(activeCustomerId, { enderecoId: addressId || undefined, cupomIds: selectedCoupons }),
+  const quote = useQuery({ queryKey: ['checkout', activeCustomerId, selection],
+    queryFn: () => vendaService.orcamento(activeCustomerId, selection),
     enabled: !!activeCustomerId, retry: false, refetchInterval: busy ? false : 15000 })
   const seconds = useReservationClock(quote.data?.expiresAt)
   const q = quote.data
-  const cardIds = (selectedCards ?? cards.filter(c => c.preferencial).map(c => c.id)).filter(id => cards.some(c => c.id === id))
+  const purchaseCards = [...cards, ...newCards.map(c => ({ id: c.id, brand: c.data.bandeira, lastDigits: c.data.numero!.replace(/\D/g, '').slice(-4), preferencial: false }))]
+  const cardIds = (selectedCards ?? cards.filter(c => c.preferencial).map(c => c.id)).filter(id => purchaseCards.some(c => c.id === id))
   const total = cents(q?.totalCartoes ?? 0)
   const usedCards = total > 0 ? cardIds : []
   const split = usedCards.length ? Math.floor(total / usedCards.length) : 0
@@ -57,14 +63,17 @@ export function CheckoutPage() {
     if (!q.items.length || seconds === 0) { setError('Carrinho vazio ou reserva expirada. Adicione os produtos novamente.'); return }
     if (total > 0 && !usedCards.length) { setError('Selecione pelo menos um cartão para pagar o saldo.'); return }
     if (!Number.isFinite(allocated) || allocated !== total) { setError('A soma dos cartões deve corresponder ao saldo após os cupons.'); return }
-    const payments = usedCards.map((id, index) => ({ cartaoId: id, valor: cents(Number(amount(id, index))) / 100 }))
-    const exception = selectedCoupons.length > 0 && total < 1000 && payments.length === 1
+    const payments = usedCards.map((id, index) => {
+      const card = newCards.find(c => c.id === id)
+      return { cartaoId: card ? undefined : id, novoCartao: card?.data, incorporarCartao: card?.incorporate, valor: cents(Number(amount(id, index))) / 100 }
+    })
+    const exception = selectedCoupons.length > 0
     if (payments.some(p => !Number.isFinite(p.valor) || p.valor <= 0 || (p.valor < 10 && !exception))) {
-      setError('Cada cartão deve pagar pelo menos R$ 10,00. Para saldo inferior após cupons, utilize um único cartão.'); return
+      setError('Cada cartão deve pagar pelo menos R$ 10,00 quando não há cupons.'); return
     }
     setBusy(true)
     try {
-      const order = await createOrder({ enderecoId: addressId, cupomIds: selectedCoupons, pagamentos: payments,
+      const order = await createOrder({ ...selection, incorporarEndereco: selectedNewAddress?.incorporate, pagamentos: payments,
         chaveOperacao: operationKey, totalEsperado: q.totalCompra, revisao: q.revisao })
       navigate(`/pedidos/${order.id}`)
     } catch (cause) { setError(errorMessage(cause)); await quote.refetch() }
@@ -87,11 +96,12 @@ export function CheckoutPage() {
       </article>
       <article className="panel form-section"><h2>Endereço de entrega</h2>
         {addresses.filter(a => a.entrega).map(a => <label className={`option-card${addressId === a.id ? ' selected' : ''}`} key={a.id}><input type="radio" name="endereco" disabled={busy} checked={addressId === a.id} onChange={() => { setSelectedAddress(a.id); setAmounts({}) }} /><span><strong>{a.label}</strong><small>{a.line}</small></span></label>)}
+        {newAddress && <label className={`option-card${selectedNewAddress ? ' selected' : ''}`}><input type="radio" name="endereco" disabled={busy} checked={!!selectedNewAddress} onChange={() => { setSelectedAddress('novo-endereco'); setAmounts({}) }} /><span><strong>{newAddress.data.nome}</strong><small>{newAddress.data.tipoLogradouro} {newAddress.data.logradouro}, {newAddress.data.numero} · {newAddress.data.cidade}/{newAddress.data.estado} · {newAddress.incorporate ? 'Salvar na conta ao finalizar' : 'Somente nesta compra'}</small></span></label>}
         {!addresses.some(a => a.entrega) && <p>Nenhum endereço de entrega disponível.</p>}
         <button type="button" className="button button--outline" disabled={busy || editor !== null} onClick={() => setEditor('address')}>Adicionar endereço</button>
-        {editor === 'address' && <MockEditor title="Novo endereço de entrega" description="O endereço será salvo na sua conta e selecionado para esta compra."
-          fields={addressFields().map(f => f.name === 'entrega' ? { ...f, value: 'true', readOnly: true } : f)} submitLabel="Salvar e selecionar endereço"
-          onClose={() => setEditor(null)} onSave={async v => { const address = await saveAddress(addressInput(v)); setSelectedAddress(address.id); setAmounts({}); setEditor(null) }} />}
+        {editor === 'address' && <MockEditor title="Novo endereço de entrega" description="Escolha se deseja salvar este endereço na conta ao finalizar a compra."
+          fields={[...addressFields().filter(f => !['residencial', 'entrega', 'cobranca'].includes(f.name)), { name: 'incorporarEndereco', label: 'Salvar endereço na minha conta', type: 'checkbox', value: 'true' }]} submitLabel="Salvar e selecionar endereço"
+          onClose={() => setEditor(null)} onSave={v => { setNewAddress({ data: { ...addressInput(v), entrega: true }, incorporate: v.incorporarEndereco === 'true' }); setSelectedAddress('novo-endereco'); setAmounts({}); setEditor(null) }} />}
       </article>
       <article className="panel form-section"><h2>Cupons</h2><p>Até um promocional e um ou mais cupons de troca.</p>
         {availableCoupons.map(c => <label className={`option-card${selectedCoupons.includes(c.id) ? ' selected' : ''}`} key={c.id}><input type="checkbox" name={'cupom-' + c.id} disabled={busy || (!selectedCoupons.includes(c.id) && !!q && q.totalCompra > 0 && selectedCouponValue >= q.totalCompra)}
@@ -99,19 +109,20 @@ export function CheckoutPage() {
         {!availableCoupons.length && <p>Nenhum cupom disponível.</p>}
       </article>
       <article className="panel form-section"><h2>Cartões</h2>
-        {cards.map(c => <label className={`option-card${usedCards.includes(c.id) ? ' selected' : ''}`} key={c.id}><input type="checkbox" name={'cartao-' + c.id} disabled={busy || (!!q && total === 0)} checked={usedCards.includes(c.id)}
-          onChange={e => { setSelectedCards(e.target.checked ? [...cardIds, c.id] : cardIds.filter(id => id !== c.id)); setAmounts({}); setError('') }} /><span><strong>{c.brand} final {c.lastDigits}</strong><small>{c.preferencial ? 'Preferencial' : 'Cartão da conta'}</small></span></label>)}
-        {usedCards.map((id, index) => <div className="payment-split" key={id}><span>Cartão final {cards.find(c => c.id === id)?.lastDigits}</span><label>Valor
-          <input aria-label={'Valor no cartão final ' + cards.find(c => c.id === id)?.lastDigits} name={'valor-' + id} type="number" min="0.01" step="0.01" disabled={busy} value={amount(id, index)} onChange={e => setAmounts(current => ({ ...current, [id]: e.target.value }))} />
+        {purchaseCards.map(c => <label className={`option-card${usedCards.includes(c.id) ? ' selected' : ''}`} key={c.id}><input type="checkbox" name={'cartao-' + c.id} disabled={busy || (!!q && total === 0)} checked={usedCards.includes(c.id)}
+          onChange={e => { setSelectedCards(e.target.checked ? [...cardIds, c.id] : cardIds.filter(id => id !== c.id)); setAmounts({}); setError('') }} /><span><strong>{c.brand} final {c.lastDigits}</strong><small>{newCards.some(n => n.id === c.id) ? (newCards.find(n => n.id === c.id)?.incorporate ? 'Salvar na conta ao finalizar' : 'Somente nesta compra') : c.preferencial ? 'Preferencial' : 'Cartão da conta'}</small></span></label>)}
+        {usedCards.map((id, index) => <div className="payment-split" key={id}><span>Cartão final {purchaseCards.find(c => c.id === id)?.lastDigits}</span><label>Valor
+          <input aria-label={'Valor no cartão final ' + purchaseCards.find(c => c.id === id)?.lastDigits} name={'valor-' + id} type="number" min="0.01" step="0.01" disabled={busy} value={amount(id, index)} onChange={e => setAmounts(current => ({ ...current, [id]: e.target.value }))} />
         </label></div>)}
         {!!q?.items.length && total === 0 && <p>Os cupons cobrem a compra. Nenhum cartão será cobrado.</p>}
         {!cards.length && <p>Nenhum cartão cadastrado.</p>}
         <button type="button" className="button button--outline" disabled={busy || !brands.data || editor !== null} onClick={() => setEditor('card')}>Adicionar cartão</button>
         {brands.error && <Alert severity="error">{errorMessage(brands.error)}</Alert>}
-        {editor === 'card' && <MockEditor title="Novo cartão para compra" description="O cartão será associado à sua conta. Use dados fictícios de teste. Número completo e CVV não são armazenados."
-          fields={cardFields(brands.data ?? [])} submitLabel="Salvar e selecionar cartão" onClose={() => setEditor(null)} onSave={async v => {
-            const card = await saveCard({ bandeira: v.bandeira, titular: v.titular, validade: v.validade, preferencial: v.preferencial === 'true', numero: v.numeroCartao, codigoSeguranca: v.codigoSeguranca })
-            setSelectedCards([...cardIds, card.id]); setAmounts({}); setEditor(null)
+        {editor === 'card' && <MockEditor title="Novo cartão para compra" description="Escolha se deseja salvar o cartão na conta ao finalizar. Use dados fictícios de teste."
+          fields={[...cardFields(brands.data ?? []).filter(f => f.name !== 'preferencial'), { name: 'incorporarCartao', label: 'Salvar cartão na minha conta', type: 'checkbox', value: 'true' }]} submitLabel="Salvar e selecionar cartão" onClose={() => setEditor(null)} onSave={v => {
+            const id = crypto.randomUUID()
+            setNewCards(current => [...current, { id, incorporate: v.incorporarCartao === 'true', data: { bandeira: v.bandeira, titular: v.titular, validade: v.validade, preferencial: false, numero: v.numeroCartao, codigoSeguranca: v.codigoSeguranca } }])
+            setSelectedCards([...cardIds, id]); setAmounts({}); setEditor(null)
           }} />}
       </article>
     </div><aside className="panel order-summary"><h2>Resumo do pedido</h2>

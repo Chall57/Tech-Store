@@ -1,5 +1,5 @@
 /// <reference types="cypress" />
-import { apiCustomer, apiProduct, apiCard, apiCoupon, fill, selectProfile, submit } from '../support/data'
+import { apiCustomer, apiProduct, apiCard, apiCoupon, fill, selectProfile, submit } from '../../support/data'
 
 function finish() { cy.contains('button', /^Finalizar compra$/).should('not.be.disabled').click() }
 function addCard(numero: string, bandeira: string) {
@@ -61,6 +61,8 @@ describe('Compra persistente com pagamento simulado local', () => {
       cy.screenshot('checkout-completo', { capture: 'fullPage' })
       finish()
       receipt().then(id => {
+        cy.contains('.status', 'EM PROCESSAMENTO').should('be.visible')
+        cy.contains('button', 'Processar pagamento').click()
         cy.contains('.status', 'APROVADA').should('be.visible')
         cy.contains('label', 'Endereço de entrega').find('input').should('contain.value', 'Compra Completa, 42')
         cy.reload()
@@ -118,6 +120,8 @@ describe('Compra persistente com pagamento simulado local', () => {
       cy.contains('.order-summary p', 'Saldo nos cartões').should('contain', '94,90')
       finish()
       receipt().then(id => {
+        cy.contains('.status', 'EM PROCESSAMENTO').should('be.visible')
+        cy.contains('button', 'Processar pagamento').click()
         cy.contains('.status', 'REPROVADA').should('be.visible')
         cy.contains('Pagamento reprovado.').should('be.visible')
         cy.request('/api/produtos/' + p.id).then(r => { expect(r.body.quantidade).to.eq(10); expect(r.body.reservado).to.eq(0) })
@@ -138,8 +142,10 @@ describe('Compra persistente com pagamento simulado local', () => {
       cy.contains('label', v.codigo).find('input').should('not.be.checked')
       cy.contains('.order-summary p', 'Saldo nos cartões').should('contain', '94,90')
       cy.contains('label', 'Visa final 1111').find('input').check()
+      cy.contains('label', w.codigo).find('input').uncheck()
+      cy.contains('.order-summary p', 'Saldo nos cartões').should('contain', '114,90')
       cy.get('[aria-label="Valor no cartão final 1111"]').clear().type('5')
-      cy.get('[aria-label="Valor no cartão final 4444"]').clear().type('89.90')
+      cy.get('[aria-label="Valor no cartão final 4444"]').clear().type('109.90')
       finish(); cy.contains('Cada cartão deve pagar pelo menos').should('be.visible')
       cy.get('[aria-label="Valor no cartão final 1111"]').clear().type('20')
       finish(); cy.contains('A soma dos cartões deve corresponder').should('be.visible')

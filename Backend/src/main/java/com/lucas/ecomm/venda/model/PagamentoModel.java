@@ -19,6 +19,9 @@ public class PagamentoModel extends BaseModel {
     private String referencia;
     @Column(length=30) private String bandeira;
     @Column(length=4) private String cartaoFinal;
+    @Column(length=5) private String cartaoValidade;
+    public String getCartaoValidade() { return cartaoValidade; }
+    public void setCartaoValidade(String valor) { cartaoValidade=valor; }
     public String getBandeira() { return bandeira; }
     public void setBandeira(String valor) { bandeira=valor; }
     public String getCartaoFinal() { return cartaoFinal; }

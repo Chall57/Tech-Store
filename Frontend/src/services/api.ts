@@ -22,11 +22,14 @@ async function responseApi(path: string, options: RequestInit = {}): Promise<Res
     throw new ApiError('Não foi possível conectar à API. Verifique se o backend está em execução.')
   }
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
+    const payload: unknown = await response.json().catch(() => null)
+    const error = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : {}
+    const fields = error.fields && typeof error.fields === 'object' && !Array.isArray(error.fields)
+      ? Object.fromEntries(Object.entries(error.fields).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) : {}
     const message = [502, 503, 504].includes(response.status)
       ? 'A API está indisponível ou não respondeu ao encaminhamento. Verifique se o backend está em execução na porta configurada e tente novamente.'
       : 'Não foi possível concluir a operação.'
-    throw new ApiError(error.message ?? message, response.status, error.fields)
+    throw new ApiError(typeof error.message === 'string' ? error.message : message, response.status, fields)
   }
   return response
 }

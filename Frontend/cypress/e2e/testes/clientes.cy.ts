@@ -1,5 +1,5 @@
 /// <reference types="cypress" />
-import { digits, customer, fill, registration, apiCustomer, selectProfile, submit } from '../support/data'
+import { digits, customer, fill, registration, apiCustomer, selectProfile, submit } from '../../support/data'
 
 describe('Cliente real — DRS LES 2 2026', () => {
   it('RF0021 RF0022 RF0023 RF0024 RN0026 RNF0035 — cadastra, consulta, altera, inativa e reativa pela interface', () => {
@@ -7,18 +7,18 @@ describe('Cliente real — DRS LES 2 2026', () => {
     cy.scrollTo('top')
     cy.screenshot('cadastro-preenchido', { capture: 'viewport' })
     cy.intercept('POST', '**/api/clientes').as('cadastro')
-    submit('Cadastrar e consultar')
+    submit('Cadastrar e acessar conta')
     cy.wait('@cadastro').then(({ response }) => {
       expect(response?.statusCode).to.eq(201)
       expect(response?.body).not.to.have.any.keys('senha', 'senhaHash', 'confirmacaoSenha')
       const id = response?.body.id
-      cy.url().should('include', '/admin/clientes?cliente=')
-      cy.contains('h2', 'Cliente: ' + data.nome).should('be.visible')
+      cy.location('pathname').should('eq', '/conta')
+      cy.contains('h2', data.nome).should('be.visible')
       cy.reload()
-      cy.contains('h2', 'Cliente: ' + data.nome).should('be.visible')
+      cy.contains('h2', data.nome).should('be.visible')
       cy.contains('button', 'Editar dados').click()
       cy.get('form[aria-label="Alterar dados pessoais"]').within(() => { fill({ nome: data.nome + ' Alterado', telefone: '988887777' }); submit() })
-      cy.contains('h2', 'Cliente: ' + data.nome + ' Alterado').should('be.visible')
+      cy.contains('h2', data.nome + ' Alterado').should('be.visible')
       cy.reload()
       cy.get('input[value="988887777"]').should('exist')
       cy.contains('button', 'Inativar cliente').click()
@@ -36,53 +36,45 @@ describe('Cliente real — DRS LES 2 2026', () => {
     })
   })
 
-  it('RF0024 RF0025 — filtros isolados e combinados e ficha com transações reais', () => {
+  it('RF0024 RF0025 — cliente consulta os próprios dados e transações', () => {
     apiCustomer().then(c => {
-      cy.visit('/admin/clientes')
-      cy.get('form[aria-label="Filtros de clientes"]').within(() => { fill({ nome: c.nome, email: c.email }); submit('Consultar clientes') })
-      cy.get('tbody tr').should('have.length', 1).and('contain', c.nome)
-      cy.contains('button', 'Consultar / alterar').click()
-      cy.contains('h2', 'Cliente: ' + c.nome).should('be.visible')
+      selectProfile(c.id)
+      cy.location('pathname').should('eq', '/conta')
+      cy.contains('h2', c.nome).should('be.visible')
+      cy.get('input[value="' + c.email + '"]').should('exist')
+      cy.get('input[value="' + c.cpf + '"]').should('exist')
       cy.contains('Nenhuma transação registrada para este cliente.').should('be.visible')
-      cy.get('form[aria-label="Filtros de clientes"]').within(() => {
-        cy.get('[name="email"]').clear().type('nao-existe@techstore.test')
-        submit('Consultar clientes')
-      })
-      cy.contains('Nenhum cliente encontrado.').should('be.visible')
-      cy.get('form[aria-label="Filtros de clientes"]').within(() => {
-        cy.get('[name="nome"]').clear(); cy.get('[name="email"]').clear()
-        fill({ cpf: c.cpf }); submit('Consultar clientes')
-      })
-      cy.get('tbody tr').should('have.length', 1).and('contain', c.nome)
+      cy.reload()
+      cy.contains('h2', c.nome).should('be.visible')
     })
   })
 
   it('RN0026 — impede campos obrigatórios vazios e CPF inválido', () => {
     cy.visit('/clientes/novo')
-    submit('Cadastrar e consultar')
+    submit('Cadastrar e acessar conta')
     cy.get('#editor-nome').then($input => expect(($input[0] as HTMLInputElement).validity.valueMissing).to.eq(true))
     registration({ ...customer(), cpf: '11111111111' })
-    submit('Cadastrar e consultar')
+    submit('Cadastrar e acessar conta')
     cy.contains('[role="alert"]', 'CPF inválido.').should('be.visible')
     cy.url().should('include', '/clientes/novo')
   })
 
   it('RNF0031 RNF0032 — exige senha forte e confirmação coincidente', () => {
     registration({ ...customer(), senha: 'fraca', confirmacaoSenha: 'fraca' })
-    submit('Cadastrar e consultar')
+    submit('Cadastrar e acessar conta')
     cy.contains('[role="alert"]', 'Senha deve ter pelo menos 8 caracteres').should('be.visible')
     fill({ senha: 'Forte@2026', confirmacaoSenha: 'Diferente@2026' })
-    submit('Cadastrar e consultar')
+    submit('Cadastrar e acessar conta')
     cy.contains('[role="alert"]', 'A confirmação de senha não confere.').should('be.visible')
   })
 
   it('Unicidade — mensagens de CPF e e-mail duplicados no cadastro', () => {
     apiCustomer().then(c => {
       registration({ ...customer(), cpf: c.cpf })
-      submit('Cadastrar e consultar')
+      submit('Cadastrar e acessar conta')
       cy.contains('[role="alert"]', 'CPF já cadastrado.').should('be.visible')
       fill({ cpf: digits(), email: c.email })
-      submit('Cadastrar e consultar')
+      submit('Cadastrar e acessar conta')
       cy.contains('[role="alert"]', 'E-mail já cadastrado.').should('be.visible')
     })
   })
@@ -114,7 +106,7 @@ describe('Cliente real — DRS LES 2 2026', () => {
   it('RN0021 RN0022 RN0026 — cadastro atômico rejeita falta de endereço obrigatório', () => {
     const data = registration()
     cy.get('[name="cobranca"]').uncheck()
-    submit('Cadastrar e consultar')
+    submit('Cadastrar e acessar conta')
     cy.contains('[role="alert"]', 'Mantenha pelo menos um endereço de cobrança.').should('be.visible')
     cy.request('/api/clientes?cpf=' + data.cpf).its('body').should('have.length', 0)
   })

@@ -55,7 +55,7 @@ public class CarrinhoService {
             int nova=expirou||!item.getProduto().getAtivo()?0:Math.min(item.getQuantidade(),disponivel);
             if(nova==0) {
                 e.setReservado(e.getReservado()-propria); item.setReservado(false); item.setRemovidoEm(agora);
-                item.setMotivoRemocao(expirou?"Prazo de reserva expirado. Adicione o produto novamente.":"Produto indisponível. Adicione novamente quando houver estoque.");
+                item.setMotivoRemocao(expirou?"Prazo de reserva de "+prazo.toMinutes()+" minutos expirado. Adicione o produto novamente.":"Produto indisponível. Adicione novamente quando houver estoque.");
                 auditoria.registrar("REMOVER_ITEM","Carrinho:"+clienteId,null,Map.of("produtoId",item.getProduto().getId(),"motivo",item.getMotivoRemocao()));
             } else {
                 if(nova!=item.getQuantidade()) {

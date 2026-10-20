@@ -58,6 +58,16 @@ public class CartaoService {
         repository.flush(); // Libera o índice único parcial antes de marcar outro preferencial.
         escolhido.setPreferencial(true);
     }
+    // Valida a composição e o domínio sem persistir PAN/CVV ou associar o cartão ao perfil.
+    public CartaoModel prepararCompra(UUID clienteId, CartaoRequest r) {
+        var model=new CartaoModel(); model.setCliente(clientes.exigir(clienteId));
+        model.setBandeira(bandeiras.findByNomeIgnoreCase(r.bandeira()).orElseThrow(()->RegraException.invalido("Bandeira não cadastrada.")));
+        if(YearMonth.parse(r.validade(),DateTimeFormatter.ofPattern("MM/yy")).isBefore(YearMonth.now())) throw RegraException.invalido("Cartão vencido.");
+        String numero=validarNumero(r.numero(),r.codigoSeguranca());
+        model.setTitular(r.titular().strip()); model.setValidade(r.validade());
+        model.setUltimosDigitos(numero.substring(numero.length()-4)); model.setImpressaoDigital(identificar(numero));
+        return model;
+    }
     @Transactional
     public CartaoResponse salvar(UUID clienteId, UUID id, CartaoRequest r) {
         var cliente=clientes.bloquear(clienteId); var model=id==null?new CartaoModel():exigir(clienteId,id);

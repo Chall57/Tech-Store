@@ -1,10 +1,10 @@
 import type { EditorField } from './MockEditor'
 import type { Cliente, ClienteInput, Endereco, EnderecoInput, Cartao } from '../services/clienteService'
 
-export function personalFields(cliente?: Cliente): EditorField[] {
+export function personalFields(cliente?: Cliente, novoCliente = false): EditorField[] {
   return [
     { name: 'nome', label: 'Nome completo', value: cliente?.nome ?? '', maxLength: 150 },
-    { name: 'genero', label: 'Gênero', value: cliente?.genero ?? '', type: 'select', options: ['', 'Masculino', 'Feminino', 'Não binário', 'Outro', 'Prefiro não informar'] },
+    { name: 'genero', label: 'Gênero', value: cliente?.genero ?? '', type: 'select', options: novoCliente ? ['', 'Masculino', 'Feminino'] : ['', 'Masculino', 'Feminino', 'Não binário', 'Outro', 'Prefiro não informar'] },
     { name: 'cpf', label: 'CPF', value: cliente?.cpf ?? '', maxLength: 14 },
     { name: 'email', label: 'E-mail', value: cliente?.email ?? '', type: 'email', maxLength: 254 },
     { name: 'dataNascimento', label: 'Data de nascimento', value: cliente?.dataNascimento ?? '', type: 'date' },

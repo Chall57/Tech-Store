@@ -1,9 +1,9 @@
 /// <reference types="cypress" />
-import { apiCustomer, fill, selectProfile, submit } from '../support/data'
+import { apiCustomer, fill, selectProfile, submit } from '../../support/data'
 
 function product() {
   return cy.request('/api/dominios/catalogo').then(r => {
-    const data = { nome: 'GPU Cypress ' + Date.now(), marca: 'Teste', descricao: 'Produto de teste persistido',
+    const data = { nome: 'GeForce RTX 5070 12GB', marca: 'NVIDIA', descricao: 'Placa de vídeo GeForce RTX 5070 com 12 GB de memória.',
       imagem: '/images/products/rtx-5070-12gb.png', preco: 150, custo: 100, ativo: true, quantidade: 10,
       grupoPrecificacaoId: r.body.grupos.find((g: { nome: string }) => g.nome === 'Padrão').id,
       categorias: [r.body.categorias.find((c: { nome: string }) => c.nome === 'Placas de vídeo').id] }
@@ -12,11 +12,11 @@ function product() {
 }
 describe('Base persistente dos módulos auxiliares', () => {
   it('Produto — cadastra pela tela, consulta, altera e deriva disponibilidade do estoque', () => {
-    const name = 'Hardware interface ' + Date.now()
+    const name = 'GeForce RTX 5070 12GB - ' + Date.now()
     cy.visit('/admin/produtos')
     cy.contains('button', 'Cadastrar produto').click()
     cy.get('form[aria-label="Cadastrar produto"]').within(() => {
-      fill({ nome: name, marca: 'Teste', descricao: 'Hardware de teste', imagem: '/images/products/rtx-5070-12gb.png', preco: '150.50', custo: '100', quantidade: '10', grupo: 'Padrão' })
+      fill({ nome: name, marca: 'NVIDIA', descricao: 'Placa de vídeo GeForce RTX 5070 com 12 GB de memória.', imagem: '/images/products/rtx-5070-12gb.png', preco: '150.50', custo: '100', quantidade: '10', grupo: 'Padrão' })
       cy.contains('label', 'Placas de vídeo').find('input[type="checkbox"]').check()
       submit()
     })

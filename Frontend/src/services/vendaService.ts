@@ -1,4 +1,5 @@
 import { api, body } from './api'
+import type { EnderecoInput, CartaoInput } from './clienteService'
 export type CartItem = { productId: string; quantity: number; name?: string; unitPrice?: number }
 export type OrderStatus = 'EM ABERTO' | 'EM PROCESSAMENTO' | 'APROVADA' | 'REPROVADA' | 'PAGAMENTO REALIZADO' | 'EM TRÂNSITO' | 'EM TRANSPORTE' | 'ENTREGUE' | 'CANCELADO' | 'EM TROCA' | 'TROCA AUTORIZADA' | 'TROCADO'
 export type ExchangeStatus = 'TROCA SOLICITADA' | 'TROCA ACEITA' | 'TROCA NEGADA' | 'ITEM ENVIADO' | 'ITEM RECEBIDO' | 'TROCA PROCESSADA'
@@ -10,15 +11,15 @@ export type Pagamento = { id: string; pedidoId: string; pedidoNumero: number; va
 export type Atividade = { id: string; data: string; acao: string; entidade: string; responsavel: string }
 export type Transacoes = { pedidos: Pedido[]; trocas: Troca[]; pagamentos: Pagamento[]; cupons: Cupom[]; atividades: Atividade[]; notificacoes: { id: string; data: string; mensagem: string }[] }
 export type CartSummary = { items: CartItem[]; expiresAt?: string; removed: { productId: string; name: string; quantity: number; reason: string; removedAt: string }[]; warnings: string[] }
-export type CheckoutSelection = { enderecoId?: string; cupomIds: string[] }
+export type CheckoutSelection = { enderecoId?: string; novoEndereco?: EnderecoInput; cupomIds: string[] }
 export type Quote = Omit<CartSummary, 'items'> & { items: Required<CartItem>[]; subtotal: number; frete: number; totalCompra: number; desconto: number; totalCartoes: number; creditoTroca: number; revisao: string; modoPagamento: string }
-export type CheckoutInput = CheckoutSelection & { enderecoId: string; pagamentos: { cartaoId: string; valor: number }[]; chaveOperacao: string; totalEsperado: number; revisao: string }
+export type CheckoutInput = CheckoutSelection & { incorporarEndereco?: boolean; pagamentos: { cartaoId?: string; novoCartao?: CartaoInput; incorporarCartao?: boolean; valor: number }[]; chaveOperacao: string; totalEsperado: number; revisao: string }
 export const vendaService = {
   solicitarTroca: (id: string, data: TrocaInput) => api<Troca>(`/clientes/${id}/trocas`, { method: 'POST', body: body(data) }),
   statusTroca: (id: string, status: ExchangeStatus, reentradaEstoque?: boolean, observacoes?: string) => api<Troca>(`/trocas/${id}/status`, { method: 'PATCH', body: body({ status, reentradaEstoque, observacoes }) }),
   despacharTroca: (clienteId: string, id: string, carrier: string, trackingCode: string, dispatchDate: string) => api<Troca>(`/clientes/${clienteId}/trocas/${id}/despacho`, { method: 'POST', body: body({ carrier, trackingCode, dispatchDate }) }),
-  pedidos: () => api<Pedido[]>('/pedidos'),
-  trocas: () => api<Troca[]>('/trocas'),
+  pedidos: (clienteId?: string) => api<Pedido[]>('/pedidos' + (clienteId ? '?clienteId=' + encodeURIComponent(clienteId) : '')),
+  trocas: (clienteId?: string) => api<Troca[]>('/trocas' + (clienteId ? '?clienteId=' + encodeURIComponent(clienteId) : '')),
   cupons: (id: string) => api<Cupom[]>(`/clientes/${id}/cupons`),
   transacoes: (id: string) => api<Transacoes>(`/clientes/${id}/transacoes`),
   carrinho: (id: string) => api<CartItem[]>(`/clientes/${id}/carrinho`),

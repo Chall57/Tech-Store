@@ -25,6 +25,10 @@ public class ApiExceptionHandler {
     }
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
     ResponseEntity<Erro> formato(Exception e) { return resposta(HttpStatus.BAD_REQUEST,"Formato de dados ou identificador inválido.",Map.of()); }
+    @ExceptionHandler(org.springframework.web.bind.MissingServletRequestParameterException.class)
+    ResponseEntity<Erro> parametroAusente(org.springframework.web.bind.MissingServletRequestParameterException e) {
+        return resposta(HttpStatus.BAD_REQUEST,"Informe os parâmetros obrigatórios da consulta.",Map.of(e.getParameterName(),"Campo obrigatório."));
+    }
     @ExceptionHandler(DataIntegrityViolationException.class)
     ResponseEntity<Erro> integridade(Exception e) { return resposta(HttpStatus.CONFLICT,"Registro duplicado ou vínculo incompatível. Confira CPF, e-mail e registros relacionados.",Map.of()); }
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)

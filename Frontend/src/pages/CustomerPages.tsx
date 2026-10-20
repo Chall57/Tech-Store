@@ -26,10 +26,14 @@ export function ProfileSelectionPage() {
 }
 export function CustomerRegistrationPage() {
   const navigate = useNavigate()
-  const { addCustomer } = useDemoStore()
+  const { addCustomer, selectCustomer } = useDemoStore()
   return <section className="page-width standard-page"><div className="page-title"><span className="eyebrow">CADASTRO DE CLIENTE</span><h1>Novo cliente</h1><p>Preencha os dados pessoais e o endereço inicial. O mesmo endereço pode ser residencial, de entrega e de cobrança.</p></div>
-    <MockEditor title="Cadastrar cliente" description="Senha: pelo menos 8 caracteres, maiúscula, minúscula e caractere especial." fields={[...personalFields(), ...passwordFields, ...addressFields(undefined, true)]} submitLabel="Cadastrar e consultar"
-      onSave={async values => { const c = await addCustomer(customerInput(values, true)); navigate('/admin/clientes?cliente=' + c.id) }} onClose={() => navigate('/perfis')} />
+    <MockEditor title="Cadastrar cliente" description="Senha: pelo menos 8 caracteres, maiúscula, minúscula e caractere especial." fields={[...personalFields(undefined, true), ...passwordFields, ...addressFields(undefined, true)]} submitLabel="Cadastrar e acessar conta"
+      onSave={async values => {
+        const cliente = await addCustomer(customerInput(values, true))
+        selectCustomer(cliente.id)
+        navigate('/conta')
+      }} onClose={() => navigate('/perfis')} />
   </section>
 }
 export function CustomerDetails({ customer }: { customer: Cliente }) {

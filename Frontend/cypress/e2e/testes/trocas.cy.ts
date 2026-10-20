@@ -1,5 +1,5 @@
 /// <reference types="cypress" />
-import { apiCustomer, apiProduct, apiCard, fill, selectProfile, submit } from '../support/data'
+import { apiCustomer, apiProduct, apiCard, fill, selectProfile, submit } from '../../support/data'
 
 describe('Pós-venda persistente local', () => {
   it('RF0041–RF0045 RN0041/RN0042/RN0043/RN0046 RF0054 — solicita, autoriza, despacha, recebe com reentrada e crédito único', () => {
@@ -11,6 +11,8 @@ describe('Pós-venda persistente local', () => {
       cy.contains('button', /^Finalizar compra$/).should('not.be.disabled').click()
       cy.location('pathname').should('match', /^\/pedidos\/[0-9a-f-]+$/).then(path => {
         const pedido = path.split('/').pop()!
+        cy.contains('button', 'Processar pagamento').click()
+        cy.contains('.status', 'APROVADA').should('be.visible')
         cy.visit('/admin/pedidos')
         const status = (value: string) => {
           cy.get('tbody tr[data-record-id="' + pedido + '"]').within(() => cy.contains('button', 'Alterar status').click())

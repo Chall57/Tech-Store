@@ -21,9 +21,11 @@ function Chart({ data }: { data: AnaliseVendas }) {
   useEffect(() => {
     if (!element.current) return
     const chart = echarts.init(element.current)
+    const fontIncrease = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-size-increase')) || 0
     chart.setOption({
+      textStyle: { fontSize: 12 + fontIncrease },
       color: data.series.map((_, i) => `hsl(${i * 137.508 % 360},65%,42%)`),
-      tooltip: { trigger: 'axis', valueFormatter: (value: unknown) => brl(Number(value)) },
+      tooltip: { trigger: 'axis', textStyle: { fontSize: 14 + fontIncrease }, valueFormatter: (value: unknown) => brl(Number(value)) },
       legend: { bottom: 0, icon: 'circle', type: 'scroll' },
       grid: { left: 12, right: 16, top: 24, bottom: 55, containLabel: true },
       xAxis: { type: 'category', boundaryGap: false, data: data.meses.map(m => m.slice(5) + '/' + m.slice(0, 4)), axisTick: { show: false } },

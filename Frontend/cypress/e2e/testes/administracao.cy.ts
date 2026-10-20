@@ -1,5 +1,5 @@
 /// <reference types="cypress" />
-import { apiProduct, fill, submit } from '../support/data'
+import { apiProduct, fill, submit } from '../../support/data'
 
 describe('Administração com histórico persistido — DRS atual', () => {
   before(() => { cy.task('prepararAdmin', null, { timeout: 65000 }); cy.task('prepararAdmin', null, { timeout: 65000 }) })
@@ -18,6 +18,12 @@ describe('Administração com histórico persistido — DRS atual', () => {
     cy.contains('h2', 'Cliente: Marina Oliveira').should('be.visible')
     cy.contains('h3', 'Histórico de atividades').should('be.visible')
     cy.contains('Pedido ').should('exist')
+    cy.get('.customer-details a[href^="/admin/pedidos/"]').first().click()
+    cy.location('pathname').should('match', /^\/admin\/pedidos\/[0-9a-f-]+$/)
+    cy.contains('h1', /^Pedido \d+$/).should('be.visible')
+    cy.get('.not-found').should('not.exist')
+    cy.document().then(doc => expect(doc.documentElement.scrollWidth).to.be.at.most(doc.documentElement.clientWidth))
+    cy.screenshot('admin-pedido-detalhe', { capture: 'viewport' })
   })
   it('RF0055/RF0057 RN0071/RN0073 RNF0043 — período e categorias, meses sem vendas zerados e dados históricos', () => {
     cy.visit('/admin/analises')

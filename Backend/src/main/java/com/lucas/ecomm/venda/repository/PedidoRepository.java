@@ -3,7 +3,9 @@ import com.lucas.ecomm.venda.model.PedidoModel;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.*;
 public interface PedidoRepository extends JpaRepository<PedidoModel,UUID> {
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths="cupomSaldo")
     List<PedidoModel> findByClienteIdOrderByCriadoEmDesc(UUID clienteId);
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths="cupomSaldo")
     List<PedidoModel> findAllByOrderByCriadoEmDesc();
     Optional<PedidoModel> findByClienteIdAndChaveOperacao(UUID clienteId,UUID chaveOperacao);
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)

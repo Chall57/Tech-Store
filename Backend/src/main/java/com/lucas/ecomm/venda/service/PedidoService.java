@@ -6,10 +6,14 @@ import com.lucas.ecomm.venda.repository.*;
 import com.lucas.ecomm.cliente.model.*;
 import com.lucas.ecomm.cliente.repository.*;
 import com.lucas.ecomm.cliente.service.ClienteService;
+import com.lucas.ecomm.cliente.service.EnderecoService;
+import com.lucas.ecomm.cliente.service.CartaoService;
+import com.lucas.ecomm.cliente.dto.EnderecoRequest;
 import com.lucas.ecomm.catalogo.repository.EstoqueRepository;
 import com.lucas.ecomm.shared.api.RegraException;
 import com.lucas.ecomm.shared.service.AuditoriaService;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -28,17 +32,22 @@ public class PedidoService {
     private final PedidoCupomRepository aplicados; private final EstoqueRepository estoques;
     private final FreteService frete; private final ProcessadorPagamento processador;
     private final ConsultaVendaService consultas; private final AuditoriaService auditoria;
+    private final EnderecoService enderecoService; private final CartaoService cartaoService;
     private static final BigDecimal ZERO=new BigDecimal("0.00");
     public PedidoService(ClienteService clientes,CarrinhoService carrinho,ItemCarrinhoRepository itensCarrinho,
         CarrinhoRepository carrinhos,EnderecoRepository enderecos,CartaoRepository cartoes,CupomRepository cupons,
         PedidoRepository pedidos,ItemPedidoRepository itens,PagamentoRepository pagamentos,PedidoCupomRepository aplicados,
-        EstoqueRepository estoques,FreteService frete,ProcessadorPagamento processador,ConsultaVendaService consultas,AuditoriaService auditoria) {
+        EstoqueRepository estoques,FreteService frete,ProcessadorPagamento processador,ConsultaVendaService consultas,AuditoriaService auditoria,
+        EnderecoService enderecoService,CartaoService cartaoService) {
         this.clientes=clientes; this.carrinho=carrinho; this.itensCarrinho=itensCarrinho; this.carrinhos=carrinhos;
         this.enderecos=enderecos; this.cartoes=cartoes; this.cupons=cupons; this.pedidos=pedidos; this.itens=itens;
         this.pagamentos=pagamentos; this.aplicados=aplicados; this.estoques=estoques; this.frete=frete;
         this.processador=processador; this.consultas=consultas; this.auditoria=auditoria;
+        this.enderecoService=enderecoService; this.cartaoService=cartaoService;
     }
-    public record Selecao(UUID enderecoId,List<@NotNull UUID> cupomIds) {}
+    public record Selecao(UUID enderecoId,List<@NotNull UUID> cupomIds,@Valid EnderecoRequest novoEndereco) {
+        public Selecao(UUID enderecoId,List<UUID> cupomIds) { this(enderecoId,cupomIds,null); }
+    }
     public record Item(UUID productId,String name,int quantity,BigDecimal unitPrice,BigDecimal subtotal) {}
     public record Orcamento(List<Item> items,BigDecimal subtotal,BigDecimal frete,BigDecimal totalCompra,BigDecimal desconto,
         BigDecimal totalCartoes,BigDecimal creditoTroca,Instant expiresAt,List<CarrinhoService.Removido> removed,
@@ -46,6 +55,13 @@ public class PedidoService {
     private EnderecoModel endereco(UUID clienteId,UUID id) {
         if(id==null) return null;
         var e=enderecos.findByIdAndClienteId(id,clienteId).orElseThrow(()->RegraException.inexistente("Endereço não encontrado para este cliente."));
+        if(!e.getEntrega()) throw RegraException.invalido("Selecione um endereço de entrega.");
+        return e;
+    }
+    private EnderecoModel destino(UUID clienteId,Selecao selecao) {
+        if(selecao.novoEndereco()==null) return endereco(clienteId,selecao.enderecoId());
+        if(selecao.enderecoId()!=null) throw RegraException.invalido("Selecione um endereço cadastrado ou informe um novo, não ambos.");
+        var e=new EnderecoModel(); EnderecoService.preencher(e,selecao.novoEndereco());
         if(!e.getEntrega()) throw RegraException.invalido("Selecione um endereço de entrega.");
         return e;
     }
@@ -67,7 +83,7 @@ public class PedidoService {
     public Orcamento orcamento(UUID clienteId,Selecao selecao) {
         var cliente=clientes.bloquear(clienteId);
         if(!cliente.getAtivo()) throw RegraException.conflito("Cliente inativo não pode finalizar compras.");
-        var resumo=carrinho.resumo(clienteId); var destino=endereco(clienteId,selecao.enderecoId());
+        var resumo=carrinho.resumo(clienteId); var destino=destino(clienteId,selecao);
         var lista=ativos(clienteId).stream().map(i->new Item(i.getProduto().getId(),i.getProduto().getNome(),i.getQuantidade(),
             i.getProduto().getPreco(),i.getProduto().getPreco().multiply(BigDecimal.valueOf(i.getQuantidade())))).toList();
         BigDecimal subtotal=lista.stream().map(Item::subtotal).reduce(ZERO,BigDecimal::add);
@@ -79,7 +95,7 @@ public class PedidoService {
             if(valor.subtract(c.getValor()).compareTo(total)>=0)
                 throw RegraException.invalido("Remova cupons desnecessários: os demais já cobrem a compra.");
         }
-        String estado=lista.toString()+selecao.enderecoId()+entrega+selecionados.stream().map(c->c.getId()+":"+c.getValor()).toList();
+        String estado=lista.toString()+selecao.enderecoId()+selecao.novoEndereco()+entrega+selecionados.stream().map(c->c.getId()+":"+c.getValor()).toList();
         String revisao;
         try { revisao=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(estado.getBytes(StandardCharsets.UTF_8))); }
         catch(java.security.NoSuchAlgorithmException erro) { throw new IllegalStateException(erro); }
@@ -90,45 +106,58 @@ public class PedidoService {
         var cliente=clientes.bloquear(clienteId);
         var anterior=pedidos.findByClienteIdAndChaveOperacao(clienteId,r.chaveOperacao());
         if(anterior.isPresent()) return consultas.consultar(anterior.get().getId());
-        var q=orcamento(clienteId,new Selecao(r.enderecoId(),r.cupomIds()));
+        var selecao=new Selecao(r.enderecoId(),r.cupomIds(),r.novoEndereco());
+        var e=destino(clienteId,selecao);
+        if(e==null) throw RegraException.invalido("Selecione um endereço de entrega.");
+        var q=orcamento(clienteId,selecao);
         if(q.items().isEmpty()) throw RegraException.conflito("Carrinho vazio ou reserva expirada. Adicione os produtos novamente.");
         if(!q.revisao().equals(r.revisao())||q.totalCompra().compareTo(r.totalEsperado())!=0)
             throw RegraException.conflito("O carrinho, os preços ou o frete mudaram. Confira o resumo atualizado antes de finalizar.");
         var lista=ativos(clienteId); var vouchers=selecionarCupons(clienteId,r.cupomIds());
-        var destinos=new HashSet<UUID>(); BigDecimal soma=ZERO;
+        var destinos=new HashSet<String>(); var cartoesCompra=new ArrayList<CartaoModel>(); BigDecimal soma=ZERO;
         for(var pagamento:r.pagamentos()) {
-            if(!destinos.add(pagamento.cartaoId())) throw RegraException.invalido("Selecione cada cartão uma única vez.");
-            var c=cartoes.findByIdAndClienteId(pagamento.cartaoId(),clienteId).orElseThrow(()->RegraException.inexistente("Cartão não encontrado para este cliente."));
+            if((pagamento.cartaoId()==null)==(pagamento.novoCartao()==null)) throw RegraException.invalido("Selecione um cartão cadastrado ou informe um novo.");
+            var c=pagamento.novoCartao()!=null?cartaoService.prepararCompra(clienteId,pagamento.novoCartao())
+                :cartoes.findByIdAndClienteId(pagamento.cartaoId(),clienteId).orElseThrow(()->RegraException.inexistente("Cartão não encontrado para este cliente."));
+            if(!destinos.add(c.getImpressaoDigital())) throw RegraException.invalido("Selecione cada cartão uma única vez.");
+            cartoesCompra.add(c);
             if(YearMonth.parse(c.getValidade(),java.time.format.DateTimeFormatter.ofPattern("MM/yy")).isBefore(YearMonth.now())) throw RegraException.invalido("Cartão vencido.");
-            boolean excecao=!vouchers.isEmpty()&&q.totalCartoes().compareTo(new BigDecimal("10.00"))<0&&r.pagamentos().size()==1;
-            if(pagamento.valor().compareTo(new BigDecimal("10.00"))<0&&!excecao) throw RegraException.invalido("Cada cartão deve pagar pelo menos R$ 10,00. Para saldo inferior após cupons, utilize um único cartão.");
+            boolean excecao=!vouchers.isEmpty(); // RN0035: a combinação de cupons e cartões é a exceção à RN0034.
+            if(pagamento.valor().compareTo(new BigDecimal("10.00"))<0&&!excecao) throw RegraException.invalido("Cada cartão deve pagar pelo menos R$ 10,00 quando não há cupons.");
             soma=soma.add(pagamento.valor());
         }
         if(soma.compareTo(q.totalCartoes())!=0) throw RegraException.invalido("A soma dos cartões deve corresponder ao saldo após os cupons.");
-        var e=endereco(clienteId,r.enderecoId());
-        var p=new PedidoModel(); p.setCliente(cliente); p.setEndereco(e);
-        p.setEnderecoEntrega(e.getTipoLogradouro()+" "+e.getLogradouro()+", "+e.getNumero()+" - "+e.getBairro()+" - "+e.getCidade()+"/"+e.getEstado()+" - CEP "+e.getCep()+" - "+e.getPais());
+        if(r.novoEndereco()!=null&&Boolean.TRUE.equals(r.incorporarEndereco())) e=enderecos.findById(enderecoService.salvar(clienteId,null,r.novoEndereco()).id()).orElseThrow();
+        var p=new PedidoModel(); p.setCliente(cliente); if(r.novoEndereco()==null||Boolean.TRUE.equals(r.incorporarEndereco())) p.setEndereco(e);
+        p.setEnderecoEntrega(e.getTipoResidencia()+" · "+e.getTipoLogradouro()+" "+e.getLogradouro()+", "+e.getNumero()+" - "+e.getBairro()+" - "+e.getCidade()+"/"+e.getEstado()+" - CEP "+e.getCep()+" - "+e.getPais()
+            +(e.getObservacoes()==null||e.getObservacoes().isBlank()?"":" · "+e.getObservacoes()));
         p.setSubtotal(q.subtotal()); p.setFrete(q.frete()); p.setDesconto(q.desconto()); p.setTotal(q.totalCompra());
         p.setExcedenteCupons(q.creditoTroca()); p.setStatus("EM PROCESSAMENTO"); p.setControlaEstoque(true);
-        p.setChaveOperacao(r.chaveOperacao()); p.setExpiraEm(Instant.now().plus(carrinho.prazo())); pedidos.saveAndFlush(p);
+        // RN0044: finalizar transfere o bloqueio; não reinicia o prazo da última inclusão.
+        p.setChaveOperacao(r.chaveOperacao()); p.setExpiraEm(q.expiresAt()); pedidos.saveAndFlush(p);
         for(var item:lista) {
             var i=new ItemPedidoModel(); i.setPedido(p); i.setProduto(item.getProduto()); i.setNomeProduto(item.getProduto().getNome());
             i.setCategoriasHistoricas(item.getProduto().getCategorias().stream().collect(java.util.stream.Collectors.toMap(c->c.getId(),c->c.getNome())));
             i.setPrecoUnitario(item.getProduto().getPreco()); i.setQuantidade(item.getQuantidade()); itens.save(i);
         }
-        for(var pag:r.pagamentos()) {
-            var c=cartoes.findByIdAndClienteId(pag.cartaoId(),clienteId).orElseThrow();
-            var pg=new PagamentoModel(); pg.setPedido(p); pg.setCartao(c); pg.setValor(pag.valor()); pg.setStatus("PENDENTE");
-            pg.setBandeira(c.getBandeira().getNome()); pg.setCartaoFinal(c.getUltimosDigitos()); pagamentos.save(pg);
+        for(int indice=0;indice<r.pagamentos().size();indice++) {
+            var pag=r.pagamentos().get(indice); var c=cartoesCompra.get(indice);
+            if(pag.novoCartao()!=null&&Boolean.TRUE.equals(pag.incorporarCartao())) c=cartoes.findById(cartaoService.salvar(clienteId,null,pag.novoCartao()).id()).orElseThrow();
+            var pg=new PagamentoModel(); pg.setPedido(p);
+            if(pag.novoCartao()==null||Boolean.TRUE.equals(pag.incorporarCartao())) pg.setCartao(c);
+            pg.setValor(pag.valor()); pg.setStatus("PENDENTE");
+            pg.setBandeira(c.getBandeira().getNome()); pg.setCartaoFinal(c.getUltimosDigitos()); pg.setCartaoValidade(c.getValidade()); pagamentos.save(pg);
         }
+        // RN0036 pertence à composição desta compra: o saldo é emitido sem aprovar pagamento ou baixar estoque.
+        gerarCredito(p);
         BigDecimal restante=q.desconto();
         for(var c:vouchers) {
             // Distribui centavos proporcionalmente: toda associação tem valor aplicado positivo.
             BigDecimal proporcao=c.getValor().multiply(q.desconto()).divide(vouchers.stream().map(CupomModel::getValor).reduce(ZERO,BigDecimal::add),2,java.math.RoundingMode.DOWN);
             BigDecimal utilizado=c==vouchers.getLast()?restante:proporcao; restante=restante.subtract(utilizado);
             if(utilizado.signum()>0) aplicados.save(new PedidoCupomModel(p,c,utilizado));
-            c.setUtilizado(true);
-            auditoria.registrar("UTILIZAR_CUPOM","Cupom:"+c.getId(),null,Map.of("clienteId",clienteId,"pedidoId",p.getId(),"codigo",c.getCodigo()));
+            var antesCupom=Map.of("clienteId",clienteId,"utilizado",c.getUtilizado()); c.setUtilizado(true);
+            auditoria.registrar("UTILIZAR_CUPOM","Cupom:"+c.getId(),antesCupom,Map.of("clienteId",clienteId,"pedidoId",p.getId(),"codigo",c.getCodigo(),"utilizado",true));
         }
         // A reserva passa do carrinho ao pedido; a quantidade física só baixa após aprovação.
         itensCarrinho.deleteAll(lista); itensCarrinho.flush(); carrinhos.findByClienteId(clienteId).ifPresent(c->c.setExpiraEm(null));
@@ -146,44 +175,66 @@ public class PedidoService {
         for(var i:itens.findByPedidoId(p.getId()).stream().sorted(Comparator.comparing(i->i.getProduto().getId())).toList()) {
             var e=estoques.bloquear(i.getProduto().getId()).orElseThrow();
             if(e.getReservado()<i.getQuantidade()) throw RegraException.conflito("Reserva de estoque inconsistente. O pedido não foi alterado.");
+            var antes=Map.of("produtoId",i.getProduto().getId(),"quantidade",e.getQuantidade(),"reservado",e.getReservado());
             e.setReservado(e.getReservado()-i.getQuantidade());
             if(aprovado) e.setQuantidade(e.getQuantidade()-i.getQuantidade());
+            auditoria.registrar(aprovado?"BAIXAR_ESTOQUE":"LIBERAR_RESERVA","Estoque:"+e.getId(),antes,
+                Map.of("produtoId",i.getProduto().getId(),"quantidade",e.getQuantidade(),"reservado",e.getReservado(),"clienteId",p.getCliente().getId(),"pedidoId",p.getId()));
         }
     }
     private void devolverCupons(PedidoModel p) {
         for(var a:aplicados.findByPedidoId(p.getId()).stream().sorted(Comparator.comparing(a->a.getCupom().getId())).toList()) {
-            var c=cupons.bloquear(a.getCupom().getId()).orElseThrow(); c.setUtilizado(false);
-            auditoria.registrar("DEVOLVER_CUPOM","Cupom:"+c.getId(),null,Map.of("clienteId",p.getCliente().getId(),"pedidoId",p.getId()));
+            var c=cupons.bloquear(a.getCupom().getId()).orElseThrow(); boolean utilizado=c.getUtilizado(); c.setUtilizado(false);
+            auditoria.registrar("DEVOLVER_CUPOM","Cupom:"+c.getId(),Map.of("utilizado",utilizado),Map.of("clienteId",p.getCliente().getId(),"pedidoId",p.getId(),"utilizado",false));
         }
+        if(p.getCupomSaldo()!=null&&!p.getCupomSaldo().getUtilizado()) {
+            p.getCupomSaldo().setUtilizado(true);
+            auditoria.registrar("INVALIDAR_CREDITO","Cupom:"+p.getCupomSaldo().getId(),Map.of("utilizado",false),Map.of("clienteId",p.getCliente().getId(),"pedidoId",p.getId(),"utilizado",true));
+        }
+    }
+    private void gerarCredito(PedidoModel p) {
+        if(p.getExcedenteCupons().signum()<=0||p.getCupomSaldo()!=null) return;
+        var c=new CupomModel(); c.setCliente(p.getCliente()); c.setCodigo("SALDO-"+p.getId()); c.setTipo("Troca");
+        c.setValor(p.getExcedenteCupons()); c.setValidade(LocalDate.now().plusYears(1)); cupons.saveAndFlush(c); p.setCupomSaldo(c);
+        auditoria.registrar("GERAR_CREDITO","Cupom:"+c.getId(),null,Map.of("clienteId",p.getCliente().getId(),"valor",c.getValor(),"pedidoId",p.getId()));
     }
     public ConsultaVendaService.Pedido processar(UUID id) {
         var p=bloquear(id);
         if(!p.getStatus().equals("EM PROCESSAMENTO")) return consultas.consultar(id); // Retentativa idempotente.
         if(p.getExpiraEm()!=null&&!p.getExpiraEm().isAfter(Instant.now())) return recusar(p,"REPROVADA");
         assegurarReserva(p);
+        // RN0037: a validade pode mudar entre a finalização e o processamento local.
+        for(var aplicado:aplicados.findByPedidoId(id).stream().sorted(Comparator.comparing(a->a.getCupom().getId())).toList()) {
+            var cupom=cupons.bloquear(aplicado.getCupom().getId()).orElseThrow();
+            if(!cupom.getUtilizado()||cupom.getValidade().isBefore(LocalDate.now())
+                ||(cupom.getCliente()!=null&&!cupom.getCliente().getId().equals(p.getCliente().getId()))) return recusar(p,"REPROVADA");
+        }
         var lista=pagamentos.findByPedidoId(id); boolean aprovado=true;
         for(var pg:lista) {
-            var retorno=processador.autorizar(pg.getCartao(),pg.getValor()); pg.setReferencia(retorno.referencia());
+            // A compra usa os dados registrados nela, não uma edição posterior do perfil.
+            var c=new CartaoModel(); var cadastrado=pg.getCartao();
+            c.setUltimosDigitos(pg.getCartaoFinal()!=null?pg.getCartaoFinal():cadastrado==null?null:cadastrado.getUltimosDigitos());
+            c.setValidade(pg.getCartaoValidade()!=null?pg.getCartaoValidade():cadastrado==null?null:cadastrado.getValidade());
+            if(c.getValidade()==null||c.getUltimosDigitos()==null) return recusar(p,"REPROVADA");
+            var retorno=processador.autorizar(c,pg.getValor()); pg.setReferencia(retorno.referencia());
             aprovado&=retorno.aprovado();
         }
         if(!aprovado) return recusar(p,"REPROVADA");
         var antes=consultas.consultar(id); movimentarReserva(p,true);
         lista.forEach(pg->pg.setStatus("APROVADO")); p.setStatus("APROVADA"); p.setExpiraEm(null);
-        if(p.getExcedenteCupons().signum()>0&&p.getCupomSaldo()==null) {
-            var c=new CupomModel(); c.setCliente(p.getCliente()); c.setCodigo("SALDO-"+id); c.setTipo("Troca");
-            c.setValor(p.getExcedenteCupons()); c.setValidade(LocalDate.now().plusYears(1)); cupons.saveAndFlush(c); p.setCupomSaldo(c);
-            auditoria.registrar("GERAR_CREDITO","Cupom:"+c.getId(),null,Map.of("clienteId",p.getCliente().getId(),"valor",c.getValor(),"pedidoId",id));
-        }
+        gerarCredito(p);
         pedidos.flush(); pagamentos.flush(); var depois=consultas.consultar(id);
         auditoria.registrar("APROVAR_PAGAMENTO","Pedido:"+id,antes,depois); return depois;
     }
     private void assegurarReserva(PedidoModel p) {
-        if(p.getControlaEstoque()) return;
+        // Mesmo com reserva existente, estoque vem antes dos cupons na ordem de locks.
         for(var item:itens.findByPedidoId(p.getId()).stream().sorted(Comparator.comparing(i->i.getProduto().getId())).toList()) {
             var e=estoques.bloquear(item.getProduto().getId()).orElseThrow();
+            if(p.getControlaEstoque()) continue;
             if(e.getQuantidade()-e.getReservado()<item.getQuantidade()) throw RegraException.conflito("Estoque insuficiente para processar o pedido.");
             e.setReservado(e.getReservado()+item.getQuantidade());
         }
+        if(p.getControlaEstoque()) return;
         p.setControlaEstoque(true); p.setExpiraEm(Instant.now().plus(carrinho.prazo()));
     }
     private ConsultaVendaService.Pedido recusar(PedidoModel p,String status) {

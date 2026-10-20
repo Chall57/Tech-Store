@@ -99,6 +99,9 @@ class CheckoutIntegrationTests {
         assertThat(processar(id).get("status").asString()).isEqualTo("APROVADA");
         assertThat(estoque(p)).isEqualTo(8); assertThat(reservado(p)).isZero(); processar(id);
         assertThat(estoque(p)).isEqualTo(8);
+        em.flush();
+        assertThat(jdbc.queryForObject("select count(*) from auditorias where operacao='BAIXAR_ESTOQUE' and alteracoes::jsonb->'antes'->>'quantidade'='10' and alteracoes::jsonb->'depois'->>'quantidade'='8' and alteracoes::jsonb->'depois'->>'pedidoId'=?",Integer.class,id)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from auditorias where entidade=? and operacao='UTILIZAR_CUPOM' and alteracoes::jsonb->'antes'->>'utilizado'='false' and alteracoes::jsonb->'depois'->>'utilizado'='true'",Integer.class,"Cupom:"+v)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from pedidos where cliente_id=?::uuid",Integer.class,c)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select utilizado from cupons where id=?::uuid",Boolean.class,v)).isTrue();
         mvc.perform(get("/api/pedidos/"+id)).andExpect(status().isOk()).andExpect(jsonPath("$.desconto").value(20))
@@ -143,6 +146,8 @@ class CheckoutIntegrationTests {
         var q=orcamento(c,endereco(c),List.of(v),200);
         assertThat(q.get("creditoTroca").asDouble()).isEqualTo(35.10);
         var order=postJson("/api/clientes/"+c+"/pedidos",compra(endereco(c),List.of(v),q,List.of()),201);
+        assertThat(order.get("status").asString()).isEqualTo("EM PROCESSAMENTO");
+        assertThat(order.get("creditCouponCode").asString()).startsWith("SALDO-");
         var paid=processar(order.get("id").asString()); processar(order.get("id").asString());
         assertThat(paid.get("creditCouponCode").asString()).startsWith("SALDO-");
         assertThat(paid.get("payments").size()).isZero();
@@ -179,7 +184,7 @@ class CheckoutIntegrationTests {
         jdbc.update("update carrinhos set expira_em=now()-interval '1 second' where cliente_id=?::uuid",c); em.clear();
         var summary=carrinhos.resumo(UUID.fromString(c)); em.flush();
         assertThat(summary.items()).isEmpty(); assertThat(summary.removed()).hasSize(1);
-        assertThat(summary.removed().getFirst().reason()).contains("expirado"); assertThat(reservado(p)).isZero();
+        assertThat(summary.removed().getFirst().reason()).contains("expirado", "30 minutos"); assertThat(reservado(p)).isZero();
         adicionar(c,p,1); assertThat(carrinhos.resumo(UUID.fromString(c)).removed()).isEmpty(); assertThat(reservado(p)).isEqualTo(1);
     }
     @Test void pedidoExpiradoECancelamentoLiberamRecursos() throws Exception {
@@ -205,5 +210,125 @@ class CheckoutIntegrationTests {
         mvc.perform(put("/api/clientes/"+c+"/carrinho/itens/"+p).contentType(MediaType.APPLICATION_JSON).content("{\"quantidade\":9}"))
             .andExpect(status().isOk()).andExpect(jsonPath("$[0].quantity").value(9));
         assertThat(reservado(p)).isEqualTo(9); adicionar(other,p,1); assertThat(reservado(p)).isEqualTo(10);
+    }
+    private Map<String,Object> novoEndereco(String estado) {
+        return Map.ofEntries(Map.entry("nome","Entrega da compra"),Map.entry("tipoResidencia","Apartamento"),
+            Map.entry("tipoLogradouro","Avenida"),Map.entry("logradouro","Francisco Rodrigues"),Map.entry("numero","42"),
+            Map.entry("bairro","Centro"),Map.entry("cep","07400000"),Map.entry("cidade","Arujá"),Map.entry("estado",estado),
+            Map.entry("pais","Brasil"),Map.entry("entrega",true),Map.entry("residencial",false),Map.entry("cobranca",false),Map.entry("observacoes","Portaria"));
+    }
+    private Map<String,Object> novoCartao(String bandeira) {
+        return Map.of("numero","4012888888881881","codigoSeguranca","123","titular","CLIENTE DA COMPRA",
+            "bandeira",bandeira,"validade","12/39","preferencial",false);
+    }
+    private Map<String,Object> compraNova(Map<String,Object> endereco,JsonNode q,boolean incorporar,String bandeira) {
+        return Map.of("novoEndereco",endereco,"incorporarEndereco",incorporar,"cupomIds",List.of(),
+            "pagamentos",List.of(Map.of("novoCartao",novoCartao(bandeira),"incorporarCartao",incorporar,"valor",q.get("totalCartoes").decimalValue())),
+            "chaveOperacao",UUID.randomUUID(),"totalEsperado",q.get("totalCompra").decimalValue(),"revisao",q.get("revisao").asString());
+    }
+    @Test void novosDadosPodemSerUsadosSomenteNaCompraSemAlterarOPerfil() throws Exception {
+        String c=cliente("52998224725"),p=produto(); adicionar(c,p,1);
+        var e=novoEndereco("SP");
+        var q=postJson("/api/clientes/"+c+"/checkout/orcamento",Map.of("novoEndereco",e,"cupomIds",List.of()),200);
+        var input=compraNova(e,q,false,"Visa");
+        var order=postJson("/api/clientes/"+c+"/pedidos",input,201);
+        assertThat(order.get("status").asString()).isEqualTo("EM PROCESSAMENTO");
+        assertThat(order.get("addressId").isNull()).isTrue();
+        assertThat(order.get("addressSnapshot").asString()).contains("Apartamento","Francisco Rodrigues","Portaria");
+        assertThat(order.get("payments").get(0).get("cardId").isNull()).isTrue();
+        assertThat(order.get("payments").get(0).get("lastDigits").asString()).isEqualTo("1881");
+        assertThat(jdbc.queryForObject("select count(*) from enderecos where cliente_id=?::uuid",Integer.class,c)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from cartoes where cliente_id=?::uuid",Integer.class,c)).isZero();
+        var repetido=postJson("/api/clientes/"+c+"/pedidos",input,201);
+        assertThat(repetido.get("id").asString()).isEqualTo(order.get("id").asString());
+        assertThat(estoque(p)).isEqualTo(10);
+        assertThat(String.join("",jdbc.queryForList("select alteracoes from auditorias",String.class))).doesNotContain("4012888888881881","codigoSeguranca");
+    }
+    @Test void novosDadosIncorporadosSaoPersistidosAtomicamenteComPedido() throws Exception {
+        String c=cliente("52998224725"),p=produto(); adicionar(c,p,1); var e=novoEndereco("SP");
+        var q=postJson("/api/clientes/"+c+"/checkout/orcamento",Map.of("novoEndereco",e,"cupomIds",List.of()),200);
+        var input=compraNova(e,q,true,"Visa");
+        var order=postJson("/api/clientes/"+c+"/pedidos",input,201);
+        postJson("/api/clientes/"+c+"/pedidos",input,201);
+        assertThat(jdbc.queryForObject("select count(*) from enderecos where cliente_id=?::uuid",Integer.class,c)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("select count(*) from cartoes where cliente_id=?::uuid",Integer.class,c)).isEqualTo(1);
+        assertThat(order.get("addressId").isNull()).isFalse();
+        assertThat(order.get("payments").get(0).get("cardId").isNull()).isFalse();
+        em.flush(); em.clear();
+        mvc.perform(get("/api/pedidos/"+order.get("id").asString())).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("EM PROCESSAMENTO"));
+        assertThat(jdbc.queryForObject("select count(*) from auditorias where operacao='FINALIZAR_COMPRA' and entidade=? and criado_em is not null and responsavel<>''",Integer.class,"Pedido:"+order.get("id").asString())).isEqualTo(1);
+    }
+    @Test void freteDependeDoEnderecoEDoNumeroDeUnidades() throws Exception {
+        String c=cliente("52998224725"),p=produto(); adicionar(c,p,2);
+        var sp=postJson("/api/clientes/"+c+"/checkout/orcamento",Map.of("novoEndereco",novoEndereco("SP"),"cupomIds",List.of()),200);
+        var rj=postJson("/api/clientes/"+c+"/checkout/orcamento",Map.of("novoEndereco",novoEndereco("RJ"),"cupomIds",List.of()),200);
+        assertThat(sp.get("frete").asDouble()).isEqualTo(16.90);
+        assertThat(rj.get("frete").asDouble()).isEqualTo(31.90);
+        assertThat(sp.get("revisao").asString()).isNotEqualTo(rj.get("revisao").asString());
+    }
+    @Test void cupomPermiteExcecaoAoMinimoSemCriarRestricaoDeQuantidadeDeCartoes() throws Exception {
+        String c=cliente("52998224725"),p=produto(),a=cartao(c,"4111111111111111"),b=cartao(c,"5555555555554444"),v=cupom(c,"Troca",20);
+        adicionar(c,p,1); var q=orcamento(c,endereco(c),List.of(v),200);
+        var order=postJson("/api/clientes/"+c+"/pedidos",compra(endereco(c),List.of(v),q,List.of(pagamento(a,5),pagamento(b,89.90))),201);
+        assertThat(order.get("status").asString()).isEqualTo("EM PROCESSAMENTO");
+        assertThat(order.get("payments").size()).isEqualTo(2);
+    }
+    @Test void bandeiraNaoCadastradaNaoPersistePedidoOuNovosDados() throws Exception {
+        String c=cliente("52998224725"),p=produto(); adicionar(c,p,1); var e=novoEndereco("SP");
+        var q=postJson("/api/clientes/"+c+"/checkout/orcamento",Map.of("novoEndereco",e,"cupomIds",List.of()),200);
+        postJson("/api/clientes/"+c+"/pedidos",compraNova(e,q,true,"Bandeira inventada"),400);
+        assertThat(jdbc.queryForObject("select count(*) from pedidos where cliente_id=?::uuid",Integer.class,c)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from enderecos where cliente_id=?::uuid",Integer.class,c)).isEqualTo(1);
+    }
+
+    @Test void finalizarPreservaOPrazoOriginalDoCarrinho() throws Exception {
+        String c=cliente("52998224725"),p=produto(),a=cartao(c,"4111111111111111"); adicionar(c,p,1); em.flush();
+        jdbc.update("update carrinhos set expira_em=now()+interval '6 minutes' where cliente_id=?::uuid",c); em.clear();
+        var q=orcamento(c,endereco(c),List.of(),200);
+        var o=postJson("/api/clientes/"+c+"/pedidos",compra(endereco(c),List.of(),q,List.of(pagamento(a,114.90))),201);
+        assertThat(o.get("expiresAt").asString()).isEqualTo(q.get("expiresAt").asString());
+    }
+
+    @Test void processamentoRevalidaCupomExpiradoSemBaixarEstoque() throws Exception {
+        String c=cliente("52998224725"),p=produto(),a=cartao(c,"4111111111111111"),v=cupom(c,"Troca",20); adicionar(c,p,1);
+        var q=orcamento(c,endereco(c),List.of(v),200);
+        var o=postJson("/api/clientes/"+c+"/pedidos",compra(endereco(c),List.of(v),q,List.of(pagamento(a,94.90))),201);
+        em.flush(); jdbc.update("update cupons set validade=current_date-1 where id=?::uuid",v); em.clear();
+        assertThat(processar(o.get("id").asString()).get("status").asString()).isEqualTo("REPROVADA");
+        assertThat(estoque(p)).isEqualTo(10); assertThat(reservado(p)).isZero();
+    }
+
+    @Test void processamentoUsaSnapshotDoCartaoMesmoDepoisDaEdicaoDoPerfil() throws Exception {
+        String c=cliente("52998224725"),p=produto(),a=cartao(c,"4111111111111111"); adicionar(c,p,1);
+        var q=orcamento(c,endereco(c),List.of(),200);
+        var o=postJson("/api/clientes/"+c+"/pedidos",compra(endereco(c),List.of(),q,List.of(pagamento(a,114.90))),201);
+        mvc.perform(put("/api/clientes/"+c+"/cartoes/"+a).contentType(MediaType.APPLICATION_JSON)
+            .content(json.writeValueAsString(Map.of("numero","4000000000000002","codigoSeguranca","123","titular","CLIENTE TESTE",
+                "bandeira","Visa","validade","12/39","preferencial",true)))).andExpect(status().isOk());
+        assertThat(processar(o.get("id").asString()).get("status").asString()).isEqualTo("APROVADA");
+    }
+
+    @Test void consultasSemParametrosObrigatoriosRetornam400() throws Exception {
+        mvc.perform(get("/api/analises/vendas")).andExpect(status().isBadRequest()).andExpect(jsonPath("$.fields.inicio").exists());
+        mvc.perform(get("/api/analises/vendas/exportacao").param("inicio","2026-01-01"))
+            .andExpect(status().isBadRequest()).andExpect(jsonPath("$.fields.fim").exists());
+    }
+
+    @Test void listagemCarregaItensCuponsEPagamentosEmLote() throws Exception {
+        String c=cliente("52998224725"),p=produto(),a=cartao(c,"4111111111111111");
+        for(int i=0;i<2;i++) {
+            adicionar(c,p,1); var q=orcamento(c,endereco(c),List.of(),200);
+            postJson("/api/clientes/"+c+"/pedidos",compra(endereco(c),List.of(),q,List.of(pagamento(a,114.90))),201);
+        }
+        em.flush(); em.clear();
+        var estatisticas=em.getEntityManagerFactory().unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        boolean habilitado=estatisticas.isStatisticsEnabled();
+        try {
+            estatisticas.setStatisticsEnabled(true); estatisticas.clear();
+            mvc.perform(get("/api/pedidos").param("clienteId",c)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2)).andExpect(jsonPath("$[0].items[0].quantity").value(1))
+                .andExpect(jsonPath("$[0].payments[0].lastDigits").value("1111"));
+            assertThat(estatisticas.getPrepareStatementCount()).isLessThanOrEqualTo(5);
+        } finally { estatisticas.setStatisticsEnabled(habilitado); }
     }
 }
